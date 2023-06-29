@@ -1,8 +1,10 @@
 CC=gcc
-CFLAGS=-lconfuse -lX11 -lXext -lXrandr -lavcodec -lavutil -lswscale -lswresample -lavformat -lpulse -lpulse-simple -lm
+CFLAGS=-lconfuse -lX11 -lXext -lavcodec -lavutil -lswscale -lswresample -lavformat -lpulse -lpulse-simple -lm
 OPT_LEVEL=-O3
 
-.PHONY: build buildir clean all
+INSTALL_DIR=/usr/local/bin
+
+.PHONY: build buildir clean all install debug
 
 
 all: build
@@ -28,6 +30,10 @@ spotlight.o: builddir
 
 build: main.o spotlight.o audio.o video.o
 	$(CC) $(CFLAGS) $(OPT_LEVEL) build/main.o build/spotlight.o build/video.o build/audio.o -o build/spotlight
+
+install: build
+	echo "Installing into ${INSTALL_DIR}"
+	install -m 755 build/spotlight ${INSTALL_DIR}
 
 debug: OPT_LEVEL=-O0 -g -fsanitize=address
 debug: build

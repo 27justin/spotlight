@@ -42,10 +42,10 @@
 - libXext
 - pulse and pulse-simple
 
-### Ubuntu
+### Arch
 
 ```bash
-apt install libconfuse-dev libx11-dev libxext-dev libpulse-dev ffmpeg libswresample-dev libavcodec-dev libswscale-dev libavformat-dev
+pacman -S confuse libx11 libxext libpulse ffmpeg
 ```
 
 ## Compiling from source

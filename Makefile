@@ -32,8 +32,9 @@ build: main.o spotlight.o audio.o video.o
 	$(CC) $(CFLAGS) $(OPT_LEVEL) build/main.o build/spotlight.o build/video.o build/audio.o -o build/spotlight
 
 install: build
-	echo "Installing into ${INSTALL_DIR}"
-	install -m 755 build/spotlight ${INSTALL_DIR}
+	sudo install -m 755 build/spotlight ${INSTALL_DIR}
+	mkdir -p ~/.config/spotlight
+	install -m 644 artifacts/config.cfg ~/.config/spotlight/config.cfg
 
 debug: OPT_LEVEL=-O0 -g -fsanitize=address
 debug: build

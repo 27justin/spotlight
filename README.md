@@ -30,7 +30,6 @@
 - Audio through PulseAudio
 - Separating audio devices into separate audio tracks
 
-
 # Installation
 
 ## Dependencies
@@ -54,14 +53,16 @@ pacman -S confuse libx11 libxext libpulse ffmpeg
 git clone https://github.com/27justin/spotlight
 cd spotlight
 make
-sudo make install
+make install
 ```
+
+You can find the config file at `~/.config/spotlight/config.cfg`.
 
 # Usage
 
 ## Configuration
 
-Spotlight uses a configuration file to determine the behavior of the program. By default, Spotlight looks for the configuration file at `~/.config/spotlight/spotlight.cfg`. You can find the default configuration [here](artifacts/default.cfg)
+Spotlight uses a configuration file to determine the behavior of the program. By default, Spotlight looks for the configuration file at `~/.config/spotlight/config.cfg`. You can find the default configuration [here](artifacts/config.cfg)
 
 ## Running
 

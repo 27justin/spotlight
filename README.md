@@ -1,7 +1,7 @@
 # Spotlight
 
 
-<img src="blob/master/artifacts/logo.png" align="left" style="display: inline; width: 250px; height: auto; margin-right: 30px">
+<img src="artifacts/logo.png" align="left" style="display: inline; width: 250px; height: auto; margin-right: 30px; margin-bottom: 30px">
 
 <p name="introduction" style="padding-bottom: 90px">
 <img src="https://img.shields.io/badge/Made%20with%20C-A8B9CC?logo=C&style=for-the-badge&labelColor=111111" />
@@ -21,14 +21,14 @@
 # Table of Contents
 
 
-# Featuresoutput-2023-06-26T21:10:15.mp4
+# Features
 
 **Spotlight** is currently in development, and as such, not all features are implemented yet. The following is a list of features that are currently implemented.
 
-- Customizable circular video and audio buffer
+- Configurable circular video and audio buffer
 - Configurable real-time video rescaling
-- Support for almost all major codecs supported by ffmpeg
-- Cherry-picking pulse audio devices
+- Audio through PulseAudio
+- Separating audio devices into separate audio tracks
 
 
 # Installation
@@ -40,12 +40,13 @@
 - [libConfuse](https://github.com/libconfuse/libconfuse)
 - libX11
 - libXext
-- avcodec
-- avformat
-- avutil
-- swscale
-- swresample
 - pulse and pulse-simple
+
+### Ubuntu
+
+```bash
+apt install libconfuse-dev libx11-dev libxext-dev libpulse-dev ffmpeg libswresample-dev libavcodec-dev libswscale-dev libavformat-dev
+```
 
 ## Compiling from source
 
@@ -60,7 +61,7 @@ sudo make install
 
 ## Configuration
 
-Spotlight uses a configuration file to determine the behavior of the program. By default, Spotlight looks for the configuration file at `~/.config/spotlight/spotlight.cfg`. You can find the default configuration [here](blob/master/artifacts/default.cfg)
+Spotlight uses a configuration file to determine the behavior of the program. By default, Spotlight looks for the configuration file at `~/.config/spotlight/spotlight.cfg`. You can find the default configuration [here](artifacts/default.cfg)
 
 ## Running
 

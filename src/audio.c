@@ -130,7 +130,7 @@ AudioStream* alloc_audio_stream(Capture* cap, AudioDevice* source) {
 		printf("Error allocating packet\n");
 		exit(1);
 	}
-	audioStream->packet->stream_index = audioStream->stream->id;
+	audioStream->packet->stream_index = audioStream->stream->index;
 
 	// Allocate resampler
 	if(audioStream->resampler == NULL) {
@@ -211,17 +211,8 @@ void flush_audio_stream(AudioStream *audio) {
 	int n = 0;
 	int ret;
 
-	printf("------------- AUDIO STREAM FOR %s ---------------\n", audio->device->name);
-	printf("Frames: %i\n", audio->frameCount);
-	printf("Start index: %i\n", start_index);
-	printf("Write index: %i\n", audio->writeIndex);
-	printf("Buffer size: %i\n", audio->bufferSize);
-	printf("Frame size: %i\n", audio->codecContext->frame_size);
-	printf("Sample rate: %i\n", audio->codecContext->sample_rate);
-	printf("PTS: %i\n", audio->pts);
 	do {
-		printf("\r[%s] Frame #%i (%i)/%i", audio->device->name, start_index, n, audio->frameCount);
-		//printf("\r[%s] Encoding Frame #%i", audio->device->name, start_index);
+		printf("\r[%s] Frame #%i (%i)/%i (PTS:%i)", audio->device->name, start_index, n, audio->frameCount, audio->pts);
 		AVFrame *frame = audio->frameBuffer[start_index];
 		frame->pts = frame->pkt_dts = audio->pts;
 		audio->pts += frame->nb_samples;
@@ -256,7 +247,6 @@ outer:
 		}
 		start_index = (start_index + 1) % audio->bufferSize;
 	}while (encoding);
-	printf("\n-------------------------------------------------\n");
 }
 
 
@@ -298,10 +288,10 @@ int open_audio_stream(Capture *cap, AudioStream* audioStream) {
 		return 1;
 	}
 
-	audioStream->stream->id = cap->formatContext->nb_streams - 1;
+	audioStream->stream->index = cap->formatContext->nb_streams - 1;
 	audioStream->stream->time_base = (AVRational) { 1, audioStream->device->sampleRate };
 	if(audioStream->packet){
-		audioStream->packet->stream_index = audioStream->stream->id;
+		audioStream->packet->stream_index = audioStream->stream->index;
 		audioStream->packet->pts = 0;
 		audioStream->packet->dts = 0;
 		audioStream->packet->duration = 0;

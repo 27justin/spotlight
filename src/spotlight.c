@@ -138,7 +138,6 @@ void free_capture(Capture *capture) {
 }
 
 void add_video_stream(Capture *capture, VideoStream *videoStream) {
-	printf("[CAPTURE] Adding video stream\n");
 	capture->video_streams = realloc(capture->video_streams, sizeof(VideoStream*) * (capture->nb_video_streams + 1));
 	capture->video_streams[capture->nb_video_streams] = videoStream;
 	capture->nb_video_streams++;
@@ -168,38 +167,26 @@ void add_audio_stream(Capture *capture, AudioStream *audioStream) {
 
 void flush_capture(Capture* cap, char* file) {
 	printf("[CAPTURE] Flushing capture into %s\n", file);
-	printf("[CAPTURE] Parameters:\n");
-	printf("\t Total streams: %i\n", cap->formatContext->nb_streams);
-
-	printf("[CAPTURE] Opening output file\n");
 	avio_open(&cap->formatContext->pb, file, AVIO_FLAG_WRITE);
-	printf("[CAPTURE] Writing header to output file\n");
 	if(avformat_write_header(cap->formatContext, NULL) < 0) {
 		printf("Error writing header\n");
 		exit(1);
 	}
 	// Flushes all streams in the capture
 	int i;
-	printf("[CAPTURE] Flushing video streams\n");
 	for(i = 0; i < cap->nb_video_streams; i++) {
 		flush_video_stream(cap->video_streams[i]);
 	}
-	printf("[CAPTURE] Flushing audio streams\n");
-	printf("Flushing %i audio streams\n", cap->nb_audio_streams);
 	for(i = 0; i < cap->nb_audio_streams; i++) {
 		flush_audio_stream(cap->audio_streams[i]);
 	}
 
-	printf("[CAPTURE] Writing trailer to file\n");
 	av_write_trailer(cap->formatContext);
-	printf("[CAPTURE] Closing output file\n");
 	avio_close(cap->formatContext->pb);
 	
 	// Reset the AVFormatContext as encoding more videos with the same context will cause errors
 	// (A bunch of "Application provided invalid, non monotonically increasing dts to muxer in stream 0")
 	// As described here: https://stackoverflow.com/questions/53004170/c-ffmpeg-how-to-continue-encoding-after-flushing
-	
-	printf("Allocating new format context\n");
 	avformat_free_context(cap->formatContext);
 
 	AVFormatContext *replacement;
@@ -213,21 +200,17 @@ void flush_capture(Capture* cap, char* file) {
 
 	// Re open streams for video and audio
 	for(i = 0; i < cap->nb_video_streams; i++) {
-		printf("Reopening video stream %i\n", i);
 		if(open_video_stream(cap, cap->video_streams[i])) {
 			fprintf(stderr, "Error opening video stream\n");
 			exit(1);
 		}
 	}
 	for(i = 0; i < cap->nb_audio_streams; i++) {
-		printf("Reopening audio stream %i\n", i);
 		if(open_audio_stream(cap, cap->audio_streams[i])) {
 			fprintf(stderr, "Error opening audio stream\n");
 			exit(1);
 		}
 	}
-	printf(" NEW CONTEXT STREAMS: %i\n", replacement->nb_streams);
-
 }
 
 

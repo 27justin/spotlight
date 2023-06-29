@@ -1,5 +1,6 @@
 #ifndef SPOTLIGHT_H_
 #define SPOTLIGHT_H_
+#include <X11/Xlib.h>
 #include <confuse.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/opt.h>
@@ -35,9 +36,10 @@ extern int init_config();
 extern int load_config();
 extern void free_config();
 
-struct VideoStream;
-struct AudioStream;
 struct Capture;
+
+struct VideoThreadContext;
+struct VideoThreadOrchestrator;
 
 typedef struct VideoStream {
 	AVStream* stream;
@@ -50,10 +52,10 @@ typedef struct VideoStream {
 
 	struct Capture *root;
 
-	struct SwsContext *swsPixfmtConverter;
-
 	size_t sourceHeight, sourceWidth;
 	size_t frameHeight, frameWidth;
+
+	struct VideoThreadOrchestrator *orchestrator;
 
 	size_t writeIndex;
 	size_t frameCount;
@@ -90,6 +92,7 @@ typedef struct Capture {
 	AVFormatContext *formatContext;
 	size_t windowSize;
 	size_t framerate;
+	volatile uint8_t pause;
 } Capture;
 
 extern Capture *alloc_capture();

@@ -25,7 +25,9 @@ typedef struct VideoThreadContext {
 	VideoThreadOrchestrator* sync;
 	sem_t active;
 	XImage* shmImage;
+	XShmSegmentInfo* shmInfo;
 	struct SwsContext *formatter;
+	volatile int ready; // Flag to indicate whether this thread has set up all thread local variables.
 } VideoThreadContext;
 
 VideoStream *default_video(struct Capture*);

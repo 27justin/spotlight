@@ -1,6 +1,16 @@
 #include "video.h"
 #include <math.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <sys/shm.h>
+#include <sys/ipc.h>
+
+
+
+extern Capture *G_CAPTURE;
+
+static void video_worker(VideoThreadContext* ctx);
+
 
 AVDictionary* parse_codec_options() {
 	// Take the options string from the config file and parse it into a dictionary
@@ -46,9 +56,6 @@ VideoStream *default_video(Capture *root) {
 	video->frameHeight = frameHeight;
 	video->frameWidth = frameWidth;
 
-	printf("Configuring codec with:\n\t%dx%d px\n", frameWidth, frameHeight);
-
-
 	video->bufferSize = cfg_getint(C_SPOTLIGHT_ROOT, "framerate") * cfg_getint(C_SPOTLIGHT_ROOT, "window-size");
 	video->frameBuffer = malloc(sizeof(AVFrame*) * video->bufferSize);
 	if(video->frameBuffer == NULL) {
@@ -56,7 +63,6 @@ VideoStream *default_video(Capture *root) {
 		return NULL;
 	}
 
-	printf("Allocating individual frames (&i frames)\n", video->bufferSize);
 
 	// Allocate AVFrame's inside frame buffer
 	for(int i = 0; i < video->bufferSize; i++) {
@@ -71,7 +77,6 @@ VideoStream *default_video(Capture *root) {
 		av_frame_get_buffer(video->frameBuffer[i], 0);
 	}
 
-	printf("Allocating packet\n");
 
 	video->packet = av_packet_alloc();
 	if(video->packet == NULL) {
@@ -81,30 +86,33 @@ VideoStream *default_video(Capture *root) {
 	video->packet->data = NULL;
 	video->packet->size = 0;
 
-	printf("Allocating SWScaler\n");
-
-	video->swsPixfmtConverter = sws_getContext(
-		sourceWidth,
-		sourceHeight,
-		AV_PIX_FMT_RGB32,
-		frameWidth,
-		frameHeight,
-		AV_PIX_FMT_YUV420P,
-		// TODO: User should be able to set the scaling algorithm
-		// 	     in the config file
-		SWS_FAST_BILINEAR, // ~21ms
-		//SWS_SINC, // ~40ms
-		//SWS_LANCZOS, // ~30ms
-		// SWS_SPLINE, // ~31ms
-		NULL,
-		NULL,
-		NULL
-	);
+	// Initialize multi-threading for this context
+	VideoThreadOrchestrator *orch = (VideoThreadOrchestrator*) malloc(sizeof(VideoThreadOrchestrator));
+	video->orchestrator = orch;
+	int threads = cfg_getint(C_SPOTLIGHT_ROOT, "threads");
+	orch->nb_threads = threads;
+	orch->contexts = malloc(sizeof(VideoThreadContext*) * threads);
+	orch->threads = malloc(sizeof(pthread_t*) * threads);
+	orch->timestamp = 0.0f;
+	orch->framerate = cfg_getint(C_SPOTLIGHT_ROOT, "framerate");
+	orch->stream = video;
 
 
-	if(video->swsPixfmtConverter == NULL) {
-		printf("Error creating sws context\n");
-		return NULL;
+	Display* display = XOpenDisplay(NULL);
+	orch->display = display;
+
+	XMapRaised(display, DefaultRootWindow(display));
+
+	int i;
+	for(i = 0; i < threads; ++i) {
+		VideoThreadContext *ctx = malloc(sizeof(VideoThreadContext));
+		memset(ctx, 0, sizeof(VideoThreadContext));
+		ctx->id = i;
+		ctx->sync = orch;
+		ctx->ready = 0;
+		sem_init(&ctx->active, 0, i == 0 ? 1 : 0);
+		orch->contexts[i] = ctx;
+		pthread_create(&orch->threads[i], NULL, video_worker, ctx);
 	}
 
 	return video;
@@ -122,14 +130,12 @@ void flush_video_stream(VideoStream *video) {
 	int n = 0;
 	int ret;
 
-	printf("\n");
-	printf("Encoding %i frames (total %i)\n", video->bufferSize, video->frameCount);
 	do {
 		AVFrame *frame = video->frameBuffer[start_index];
 		frame->pts = av_rescale_q(n, video->codecContext->time_base, video->stream->time_base);
 		frame->pkt_dts = av_rescale_q(n, video->codecContext->time_base, video->stream->time_base);
 
-		//printf("\r[VIDEO] Encoding Frame %i/%i (PTS: %ld)", start_index, video->bufferSize, frame->pts);
+		printf("\r[VIDEO] Encoding Frame %i/%i (PTS: %ld)", start_index, video->bufferSize, frame->pts);
 
 		ret = avcodec_send_frame(video->codecContext, frame);
 		if (ret < 0) {
@@ -160,24 +166,37 @@ outer:
 		start_index = (start_index + 1) % video->bufferSize;
 	}while (encoding);
 
-	//video->pts = av_rescale_q(n + 1, video->codecContext->time_base, video->stream->time_base) + video->pts;
-
-	printf("\n");
 }
 
+// TODO: Debug this function, as of now it isn't really used as the binary should
+// never really exit, except with SIGINT, in which case we don't need to free.
 void free_video_stream(VideoStream *video) {
+	// Kill all threads
+	for(int i = 0; i < video->orchestrator->nb_threads; i++) {
+		VideoThreadContext *ctx = video->orchestrator->contexts[i];
+		pthread_kill(video->orchestrator->threads[i], SIGINT);
+		// Free XShm stuff
+		if(ctx->shmInfo->shmaddr != NULL) {
+			XShmDetach(ctx->sync->display, ctx->shmInfo);
+			shmdt(ctx->shmInfo->shmaddr);
+			shmctl(ctx->shmInfo->shmid, IPC_RMID, 0);
+		}
+		free(ctx);
+	}
+	// Free XDisplay
+	XCloseDisplay(video->orchestrator->display);
+	free(video->orchestrator->contexts);
+	free(video->orchestrator->threads);
+	free(video->orchestrator);
+	
 	// Free all the things
-	printf("[VIDEO] Freeing colorspace converter\n");
-	if(video->swsPixfmtConverter)
-		sws_freeContext(video->swsPixfmtConverter);
-	printf("[VIDEO] Freeing packet\n");
 	av_packet_free(&video->packet);
-	printf("[VIDEO] Freeing codec context\n");
 	avcodec_free_context(&video->codecContext);
 	// Free all frames inside frameBuffer
 	for(int i = 0; i < video->bufferSize; i++) {
 		av_frame_free(&video->frameBuffer[i]);
 	}
+	free(video->frameBuffer);
 }
 
 void video_encode_ximage(VideoStream *video, XImage *screenContent, struct SwsContext *formatter) {
@@ -188,7 +207,6 @@ void video_encode_ximage(VideoStream *video, XImage *screenContent, struct SwsCo
 	// the sws_scale function would more often than not cause a SEGFAULT, the most likely reason is some internal variables
 	// in SwsContext being messed up with multi-threading.
 	
-	//printf("[VID] Circular Buffer #%d, Frame Count %d\n", video->writeIndex, video->frameCount);
 	AVFrame* frame = video->frameBuffer[video->writeIndex];
 	av_frame_make_writable(frame);
 
@@ -199,17 +217,6 @@ void video_encode_ximage(VideoStream *video, XImage *screenContent, struct SwsCo
 	
 	// Convert XImage to AVFrame using the previously initialized swscaler.
 	// This scaler converts both RGB32 to YUV420P, and scales the frame down if it was so configured to be.
-	// This code sometimes segfaults, print all relevant memory addresses
-	// to make debugging easier.
-	/*printf("[VID] Converting XImage to AVFrame\n");
-	printf("[VID] XImage: %p\n", screenContent->data);
-	printf("[VID] AVFrame: %p\n", frame->data);
-	printf("[VID] swsPixfmtConverter: %p\n", formatter);
-	printf("[VID] screenContent->bytes_per_line: %d\n", screenContent->bytes_per_line);
-	printf("[VID] screenContent->height: %d\n", screenContent->height);
-	printf("[VID] frame->linesize: %d\n", frame->linesize[0]);
-	printf("[VID] frame->height: %d\n", frame->height);
-	printf("[VID] Frame idx: %d, buffer size: %d\n", video->writeIndex, video->bufferSize);*/
 	sws_scale(
 		formatter,
 		(const uint8_t * const *) &screenContent->data,
@@ -223,42 +230,11 @@ void video_encode_ximage(VideoStream *video, XImage *screenContent, struct SwsCo
 }
 
 
-uint32_t correct_video_drift(VideoStream *video, int64_t drift) {
-	// Correct the video drift.
-	// This function should only EVER be called when `video_encode_ximage` took longer than the frame time.
-	// This function will then correct the drift by duplication (drift / frame time) frames, and sleep for the remaining time.
-
-	// Calculate the number of frames by dividing drift by frame time.
-	// The number has to be rounded up, as we can't duplicate half a frame.
-	float frameTime = 1000.0 / video->codecContext->framerate.num * video->codecContext->framerate.den;
-	int64_t driftedFrames = ceil(drift / frameTime);
-
-	// Duplicate the frames
-	int i;
-	for(i = 0; i < driftedFrames; i++) {
-		// memcpy the frame data from the previous frame
-		AVFrame* previousFrame = video->frameBuffer[(video->writeIndex - 1) % video->bufferSize];
-		AVFrame* frame = video->frameBuffer[video->writeIndex];
-		memcpy(frame->data[0], previousFrame->data[0], frame->linesize[0] * video->codecContext->height);
-
-		video->writeIndex = (video->writeIndex + 1) % video->bufferSize;
-		video->frameCount++;
-	}
-
-	// Sleep for the remaining time
-	int64_t remainingTime = (driftedFrames * frameTime) - drift;
-	printf("[VIDEO] Drift: %ld ms (%d correction frames were inserted), Remaining Time: %ld ms\n", drift, driftedFrames, remainingTime);
-	usleep(remainingTime * 1000);
-
-	return driftedFrames;
-}
-
 int open_video_stream(Capture *capture, VideoStream* vstream) {
 	// Free all the things
 	if(vstream->codecContext)
 		avcodec_free_context(&vstream->codecContext);
 	// Open the AVStream for this stream in the capture's AVFormatContext
-	printf("[VIDEO] Opening video stream in encoder\n");
 
 	const char* codecName = cfg_getstr(C_CODEC_ROOT, "name");
 	int bitrate = cfg_getint(C_CODEC_ROOT, "bitrate");
@@ -274,7 +250,6 @@ int open_video_stream(Capture *capture, VideoStream* vstream) {
 		printf("Could not allocate stream\n");
 		return 1;
 	}
-	printf("[VIDEO] Created new stream\n");
 	track->id = capture->formatContext->nb_streams - 1;
 	vstream->packet->stream_index = track->id;
 	vstream->packet->pts = 0;
@@ -282,14 +257,12 @@ int open_video_stream(Capture *capture, VideoStream* vstream) {
 	vstream->packet->duration = 0;
 	vstream->pts = 0;
 
-	printf("[VIDEO] Allocating codec with ID: %d\n", vstream->codec->id);
 	vstream->codecContext = avcodec_alloc_context3(vstream->codec);
 	if(vstream->codecContext == NULL) {
 		printf("Error allocating codec context\n");
 		return 1;
 	}
 
-	printf("[VIDEO] Populating codec context\n");
 
 	vstream->codecContext->bit_rate = bitrate;
 	vstream->codecContext->width = vstream->frameWidth;
@@ -312,15 +285,11 @@ int open_video_stream(Capture *capture, VideoStream* vstream) {
 
 	vstream->stream = track;
 
-	printf("[VIDEO] Copying codec parameters to stream\n");
-
 	if(avcodec_parameters_from_context(track->codecpar, vstream->codecContext) < 0) {
 		printf("Failed to copy codec parameters to stream\n");
 		return 1;
 	}
 
-	printf("[VIDEO] Opening codec\n");
-	
 	AVDictionary *dict = parse_codec_options();
 	if(avcodec_open2(vstream->codecContext, vstream->codec, &dict) < 0) {
 		printf("Error opening codec\n");
@@ -328,5 +297,114 @@ int open_video_stream(Capture *capture, VideoStream* vstream) {
 	}
 
 	return 0;
+}
+
+
+#define TIMESPEC_TO_MS(ts) (((float)(ts).tv_sec * 1000.0f) + ((float)(ts).tv_nsec / 1000000.0f))
+
+static void video_worker(VideoThreadContext *ctx) {
+	struct timespec threadTime;
+
+	float frameTime = 1000.0 / ctx->sync->framerate;
+
+	// Initialize XShm module for this thread.
+	// In the past, multiple threads used a single XImage for capturing, 
+	// however this was subject to race conditions in specific contexts.
+	// The threads are synchronized to always take a screenshot at the frame time
+	// for 30 fps, this would be 33.3ms, if a thread spends more than frame-time on `video_encode_ximage`
+	// then the next thread is already overwriting the image data the previous thread is still working on.
+	// For my point of view, this is a suboptimal, but the only feasible solution.
+	// The resource overhead should be somewhere along the lines of (width * height * 4) * nb_threads + SHM structs
+	// which is a lot, but acceptable for now.
+	
+	/* --------------------- INITIALIZE MIT-SHM MODULE --------------------- */
+	int framerate = cfg_getint(C_SPOTLIGHT_ROOT, "framerate");
+	int xOffset = cfg_getint(C_CAPTURE_ROOT, "x");
+	int yOffset = cfg_getint(C_CAPTURE_ROOT, "y");
+	int width = cfg_getint(C_CAPTURE_ROOT, "width");
+	int height = cfg_getint(C_CAPTURE_ROOT, "height");
+
+	if(!XShmQueryExtension(ctx->sync->display)) {
+		printf("XShm extension not supported\n");
+		return;
+	}
+
+	// Create a XShm instance for the X11 display
+	// at coordinates captureRoot->x, captureRoot->y, captureRoot->width, captureRoot->height
+	XShmSegmentInfo* xShmInfo = malloc(sizeof(XShmSegmentInfo));
+
+	XImage* xImage = XShmCreateImage(
+		ctx->sync->display,
+		XDefaultVisual(ctx->sync->display, XDefaultScreen(ctx->sync->display)),
+		XDefaultDepth(ctx->sync->display, XDefaultScreen(ctx->sync->display)),
+		ZPixmap,
+		NULL,
+		xShmInfo,
+		width,
+		height);
+
+	xShmInfo->shmid = shmget(IPC_PRIVATE, xImage->bytes_per_line * xImage->height, IPC_CREAT | 0600);
+	if(xShmInfo->shmid == -1) {
+		printf("Error creating shared memory segment\n");
+		return;
+	}
+
+	xImage->data = shmat(xShmInfo->shmid, 0, 0);
+	xShmInfo->shmaddr = xImage->data;
+
+	xShmInfo->readOnly = 0;
+	if(!XShmAttach(ctx->sync->display, xShmInfo)) {
+		printf("Error attaching shared memory segment\n");
+		return;
+	}
+
+	ctx->shmInfo = xShmInfo;
+
+
+	ctx->formatter = sws_getContext(
+		ctx->sync->stream->sourceWidth,
+		ctx->sync->stream->sourceHeight,
+		AV_PIX_FMT_RGB32,
+		ctx->sync->stream->frameWidth,
+		ctx->sync->stream->frameHeight,
+		AV_PIX_FMT_YUV420P,
+		// TODO: User should be able to set the scaling algorithm
+		// 	     in the config file
+		SWS_FAST_BILINEAR, // ~21ms
+		//SWS_SINC, // ~40ms
+		//SWS_LANCZOS, // ~30ms
+		// SWS_SPLINE, // ~31ms
+		NULL,
+		NULL,
+		NULL
+	);
+
+	ctx->ready = 1;
+
+	float frameTimer = 0.0;
+	while(1) {
+		// Wait for encoder to finish
+		while(G_CAPTURE->pause == 1);
+		sem_wait(&ctx->active);
+		clock_gettime(CLOCK_MONOTONIC, &threadTime);
+		frameTimer = TIMESPEC_TO_MS(threadTime) - ctx->sync->timestamp;
+		if(frameTimer < frameTime) {
+			usleep((frameTime - frameTimer) * 1000);
+		}
+
+		// Unlock semaphore for next thread
+		clock_gettime(CLOCK_MONOTONIC, &threadTime);
+		ctx->sync->timestamp = TIMESPEC_TO_MS(threadTime);
+
+		sem_post(&ctx->sync->contexts[(ctx->id + 1) % ctx->sync->nb_threads]->active);
+
+		if (!XShmGetImage(ctx->sync->display, DefaultRootWindow(ctx->sync->display), xImage, 0, 0, AllPlanes)) {
+		}
+
+
+		video_encode_ximage(ctx->sync->stream, xImage, ctx->formatter);
+
+	}
+
 }
 
